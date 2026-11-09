@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f6fb">
+  <title>Чат-бот поддержки — учебный прототип</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <main class="page-shell">
+    <header class="page-heading">
+      <a class="brand-mark" href="#" aria-label="Чат-бот поддержки">
+        <span class="brand-icon" aria-hidden="true">Ч</span>
+      </a>
+      <div class="heading-copy">
+        <h1>Чат-бот поддержки</h1>
+        <p>Помощь по вопросам учебного магазина</p>
+      </div>
+      <span class="prototype-badge">Учебный прототип</span>
+    </header>
+
+    <section class="chat-card" aria-label="Чат поддержки">
+      <div class="chat-topbar">
+        <div class="assistant-identity">
+          <span class="assistant-avatar" aria-hidden="true">Ч</span>
+          <div>
+            <h2>Помощник магазина</h2>
+            <p><span class="status-dot" aria-hidden="true"></span>Учебный сценарий</p>
+          </div>
+        </div>
+        <button class="restart-button" id="restart-button" type="button">
+          <span aria-hidden="true">↻</span>
+          Начать заново
+        </button>
+      </div>
+
+      <div class="notice" role="note">
+        <span class="notice-icon" aria-hidden="true">i</span>
+        <p>Условия магазина вымышлены и используются только в образовательных целях.</p>
+      </div>
+
+      <section
+        class="messages"
+        id="messages"
+        aria-label="Сообщения чата"
+        aria-live="polite"
+        aria-relevant="additions text"
+        tabindex="0"
+      ></section>
+
+      <nav class="quick-actions" id="quick-actions" aria-label="Быстрые ответы"></nav>
+
+      <form class="composer" id="chat-form">
+        <label class="sr-only" for="message-input">Введите ваш вопрос</label>
+        <input
+          id="message-input"
+          name="message"
+          type="text"
+          autocomplete="off"
+          placeholder="Напишите ваш вопрос..."
+        >
+        <button class="send-button" type="submit">
+          <span>Отправить</span>
+          <span aria-hidden="true">↑</span>
+        </button>
+      </form>
+      <p class="keyboard-hint">Нажмите Enter, чтобы отправить сообщение</p>
+    </section>
+    <footer class="page-footer">Учебный проект · Без подключения к реальным сервисам</footer>
+  </main>
+</body>
+</html>
