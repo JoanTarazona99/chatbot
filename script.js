@@ -213,7 +213,9 @@ function handleUserMessage(rawMessage) {
 
   addMessage(message, "user");
 
-  if (isOperatorRequest(message)) {
+  if (message.toLocaleLowerCase("ru-RU") === "главное меню") {
+    addMessage("Выберите тему или задайте вопрос.", "bot");
+  } else if (isOperatorRequest(message)) {
     addMessage(OPERATOR_MESSAGE, "bot");
   } else {
     const faqMatch = findFaq(message);
