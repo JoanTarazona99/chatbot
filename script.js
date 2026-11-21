@@ -3,33 +3,48 @@
 const INITIAL_GREETING =
   "Здравствуйте! Я учебный чат-бот поддержки. Выберите тему или задайте вопрос.";
 const FALLBACK =
-  "Пока нет подходящего ответа. Выберите тему или запросите оператора.";
+  "Пока нет подходящего ответа. Выберите тему, укажите номер учебного заказа или запросите оператора.";
 const OPERATOR_MESSAGE =
-  "Это демонстрационная функция. В реальном продукте здесь создавался бы запрос оператору. Подключение к реальному оператору не выполняется.";
+  "Это демонстрационная функция. Реальный запрос не отправляется, реальный оператор не подключается.";
+const STORAGE_KEYS = {
+  history: "lab4-chat-history",
+  faq: "lab4-faq-edits",
+  ratings: "lab4-ratings"
+};
+const COMMENT_LIMIT = 240;
 
 const topics = {
   "Оплата": [
     {
+      id: "payment-methods",
       question: "Какие способы оплаты доступны?",
       answer: "В нашем учебном магазине предусмотрена оплата банковской картой."
     }
   ],
   "Доставка": [
     {
+      id: "delivery-time",
       question: "Какие сроки доставки?",
       answer: "Примерный срок доставки — 3–5 рабочих дней. Точный срок уточняется при оформлении заказа."
     },
     {
+      id: "track-order",
       question: "Как отследить заказ?",
       answer: "В учебном сценарии статус заказа можно посмотреть в разделе “Мои заказы”."
     }
   ],
   "Аккаунт": [
     {
+      id: "recover-password",
       question: "Как восстановить пароль?",
       answer: "На странице входа нажмите “Забыли пароль?” и следуйте инструкциям."
     }
   ]
+};
+
+const demoOrders = {
+  "1001": { status: "Передан в доставку", delivery: "Ожидаемая доставка: 25 ноября" },
+  "1002": { status: "Собирается", delivery: "Ожидаемая доставка: 28 ноября" }
 };
 
 const messagesElement = document.querySelector("#messages");
@@ -37,69 +52,232 @@ const quickActionsElement = document.querySelector("#quick-actions");
 const chatForm = document.querySelector("#chat-form");
 const messageInput = document.querySelector("#message-input");
 const restartButton = document.querySelector("#restart-button");
+const storageNotice = document.querySelector("#storage-notice");
+const faqSelector = document.querySelector("#faq-selector");
+const faqAnswer = document.querySelector("#faq-answer");
+const faqEditorStatus = document.querySelector("#faq-editor-status");
+const scheduleTime = document.querySelector("#schedule-time");
+
+let storageAvailable = true;
+let nextMessageNumber = 0;
+let messages = [];
+let ratings = [];
+let faqEdits = {};
+
+function showStorageWarning(details) {
+  storageAvailable = false;
+  storageNotice.hidden = false;
+  storageNotice.textContent =
+    `Локальное хранилище недоступно. Прототип продолжит работу только в этой вкладке; данные после закрытия не сохранятся. ${details}`;
+}
+
+function initializeStorage() {
+  try {
+    const probe = `${STORAGE_KEYS.history}-probe`;
+    localStorage.setItem(probe, "ok");
+    localStorage.removeItem(probe);
+  } catch (error) {
+    showStorageWarning(`Причина: ${error.message}`);
+  }
+}
+
+function readStored(key, fallback) {
+  if (!storageAvailable) {
+    return fallback;
+  }
+
+  try {
+    const stored = localStorage.getItem(key);
+    return stored === null ? fallback : JSON.parse(stored);
+  } catch (error) {
+    showStorageWarning(`Не удалось прочитать локальные данные: ${error.message}`);
+    return fallback;
+  }
+}
+
+function writeStored(key, value) {
+  if (!storageAvailable) {
+    return;
+  }
+
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    showStorageWarning(`Не удалось сохранить локальные данные: ${error.message}`);
+  }
+}
+
+function saveHistory() {
+  writeStored(STORAGE_KEYS.history, messages);
+}
+
+function saveRatings() {
+  writeStored(STORAGE_KEYS.ratings, ratings);
+}
+
+function saveFaqEdits() {
+  writeStored(STORAGE_KEYS.faq, faqEdits);
+}
+
+function allFaqs() {
+  return Object.values(topics).flat();
+}
+
+function getFaqAnswer(faq) {
+  return faqEdits[faq.id] || faq.answer;
+}
+
+function findRating(messageId) {
+  return ratings.find((rating) => rating.messageId === messageId);
+}
 
 function scrollToLatestMessage() {
   messagesElement.scrollTop = messagesElement.scrollHeight;
 }
 
-function addMessage(text, sender, options = {}) {
-  const row = document.createElement("article");
-  row.className = `message-row ${sender}`;
+function renderFeedback(message, feedback) {
+  const rating = findRating(message.id);
 
-  const senderLabel = document.createElement("span");
-  senderLabel.className = "message-sender";
-  senderLabel.textContent = sender === "bot" ? "Помощник" : "Вы";
+  if (rating) {
+    const result = document.createElement("span");
+    result.className = "feedback-result";
+    result.textContent = rating.vote === "Да"
+      ? "Спасибо за оценку!"
+      : "Спасибо за обратную связь. Вы можете выбрать другую тему или запросить оператора.";
+    feedback.append(result);
 
-  const bubble = document.createElement("div");
-  bubble.className = "message-bubble";
-  bubble.textContent = text;
-  row.append(senderLabel, bubble);
+    if (rating.commentDone) {
+      if (rating.comment) {
+        const savedComment = document.createElement("span");
+        savedComment.className = "saved-comment";
+        savedComment.textContent = `Комментарий: ${rating.comment}`;
+        feedback.append(savedComment);
+      }
+      return;
+    }
 
-  if (options.rateable) {
-    addFeedbackControls(row);
+    const commentLabel = document.createElement("label");
+    commentLabel.className = "comment-label";
+    commentLabel.textContent = `Комментарий (необязательно, до ${COMMENT_LIMIT} символов)`;
+
+    const commentInput = document.createElement("textarea");
+    commentInput.className = "rating-comment";
+    commentInput.maxLength = COMMENT_LIMIT;
+    commentInput.rows = 2;
+    commentInput.placeholder = "Что можно улучшить?";
+    commentInput.setAttribute("aria-label", "Необязательный комментарий к оценке");
+
+    const counter = document.createElement("span");
+    counter.className = "comment-counter";
+    counter.textContent = `0 / ${COMMENT_LIMIT}`;
+    commentInput.addEventListener("input", () => {
+      if (commentInput.value.length > COMMENT_LIMIT) {
+        commentInput.value = commentInput.value.slice(0, COMMENT_LIMIT);
+      }
+      counter.textContent = `${commentInput.value.length} / ${COMMENT_LIMIT}`;
+    });
+
+    const actions = document.createElement("div");
+    actions.className = "comment-actions";
+    const saveComment = document.createElement("button");
+    saveComment.className = "feedback-button";
+    saveComment.type = "button";
+    saveComment.textContent = "Сохранить комментарий";
+    saveComment.addEventListener("click", () => {
+      rating.comment = commentInput.value.trim();
+      rating.commentDone = true;
+      saveRatings();
+      renderMessages();
+      updateStatistics();
+    });
+
+    const skipComment = document.createElement("button");
+    skipComment.className = "feedback-button";
+    skipComment.type = "button";
+    skipComment.textContent = "Без комментария";
+    skipComment.addEventListener("click", () => {
+      rating.comment = "";
+      rating.commentDone = true;
+      saveRatings();
+      renderMessages();
+    });
+
+    actions.append(saveComment, skipComment);
+    feedback.append(commentLabel, commentInput, counter, actions);
+    return;
   }
-
-  messagesElement.append(row);
-  scrollToLatestMessage();
-  return row;
-}
-
-function addFeedbackControls(messageRow) {
-  const feedback = document.createElement("div");
-  feedback.className = "feedback";
 
   const prompt = document.createElement("span");
   prompt.className = "feedback-prompt";
   prompt.textContent = "Ответ помог?";
-
   feedback.append(prompt);
+
   ["Да", "Нет"].forEach((choice) => {
     const button = document.createElement("button");
     button.className = "feedback-button";
     button.type = "button";
     button.textContent = choice;
     button.addEventListener("click", () => {
-      if (button.disabled) {
+      if (findRating(message.id)) {
         return;
       }
 
-      feedback.querySelectorAll("button").forEach((item) => {
-        item.disabled = true;
-        item.hidden = true;
+      ratings.push({
+        messageId: message.id,
+        vote: choice,
+        comment: "",
+        commentDone: false
       });
-
-      const result = document.createElement("span");
-      result.className = "feedback-result";
-      result.textContent = choice === "Да"
-        ? "Спасибо за оценку!"
-        : "Спасибо за обратную связь. Вы можете выбрать другую тему или запросить оператора.";
-      feedback.append(result);
-      scrollToLatestMessage();
+      saveRatings();
+      renderMessages();
+      updateStatistics();
     });
     feedback.append(button);
   });
+}
 
-  messageRow.append(feedback);
+function renderMessage(message) {
+  const row = document.createElement("article");
+  row.className = `message-row ${message.sender}`;
+
+  const senderLabel = document.createElement("span");
+  senderLabel.className = "message-sender";
+  senderLabel.textContent = message.sender === "bot" ? "Помощник" : "Вы";
+
+  const bubble = document.createElement("div");
+  bubble.className = "message-bubble";
+  bubble.textContent = message.text;
+  row.append(senderLabel, bubble);
+
+  if (message.rateable) {
+    const feedback = document.createElement("div");
+    feedback.className = "feedback";
+    renderFeedback(message, feedback);
+    row.append(feedback);
+  }
+
+  messagesElement.append(row);
+}
+
+function renderMessages() {
+  messagesElement.replaceChildren();
+  messages.forEach(renderMessage);
+  scrollToLatestMessage();
+}
+
+function addMessage(text, sender, options = {}) {
+  nextMessageNumber += 1;
+  const message = {
+    id: `${Date.now()}-${nextMessageNumber}`,
+    sender,
+    text,
+    rateable: Boolean(options.rateable)
+  };
+  messages.push(message);
+  saveHistory();
+  renderMessage(message);
+  scrollToLatestMessage();
+  return message;
 }
 
 function createQuickButton(label, action, isPrimary = false) {
@@ -119,17 +297,28 @@ function showTopicMenu() {
     );
   });
   quickActionsElement.append(
+    createQuickButton("Заказ № 1001", () => lookupOrder("1001"))
+  );
+  quickActionsElement.append(
     createQuickButton("Оператор", showOperatorSimulation)
   );
 }
 
 function showTopicQuestions(topic) {
   quickActionsElement.replaceChildren();
-  topics[topic].forEach(({ question }) => {
+  topics[topic].forEach((faq) => {
     quickActionsElement.append(
-      createQuickButton(question, () => askQuestion(question))
+      createQuickButton(faq.question, () => askQuestion(faq))
     );
   });
+  if (topic === "Доставка") {
+    quickActionsElement.append(
+      createQuickButton("Заказ № 1001", () => lookupOrder("1001"))
+    );
+    quickActionsElement.append(
+      createQuickButton("Заказ № 1002", () => lookupOrder("1002"))
+    );
+  }
   quickActionsElement.append(
     createQuickButton("Главное меню", returnToMenu, true)
   );
@@ -169,7 +358,8 @@ function findFaq(message) {
     }
   ];
 
-  return checks.find(({ pattern }) => pattern.test(text));
+  const match = checks.find(({ pattern }) => pattern.test(text));
+  return match ? topics[match.topic][match.faqIndex] : null;
 }
 
 function isOperatorRequest(message) {
@@ -177,25 +367,100 @@ function isOperatorRequest(message) {
     .test(message);
 }
 
-function askQuestion(question) {
-  const faq = Object.values(topics)
-    .flat()
-    .find((item) => item.question === question);
+function askQuestion(faq) {
+  addMessage(faq.question, "user");
+  addMessage(getFaqAnswer(faq), "bot", { rateable: true });
+  showTopicMenu();
+}
 
-  if (!faq) {
-    addMessage(FALLBACK, "bot");
+function getOrderRequest(message) {
+  const normalized = message.toLocaleLowerCase("ru-RU");
+  const orderIntent = /заказ/.test(normalized);
+  const trackingFaq = findFaq(message);
+  if (!orderIntent || (trackingFaq && !/\d/.test(message) && !/(проверь|проверить|статус)/.test(normalized))) {
+    return null;
+  }
+
+  const match = normalized.match(/заказ(?:а|у|ом|е|ы|ов)?\s*(?:№|номер)?\s*([^\s,.;!?]*)/);
+  return { number: match ? match[1].replace(/^№/, "") : "" };
+}
+
+function lookupOrder(rawNumber) {
+  const number = String(rawNumber || "").trim();
+  addMessage(number ? `Статус заказа № ${number}` : "Проверить статус заказа", "user");
+
+  if (!/^\d{4}$/.test(number)) {
+    addMessage(
+      "Укажите номер учебного заказа из четырёх цифр, например 1001 или 1002. Это демонстрационные данные.",
+      "bot"
+    );
     showTopicMenu();
     return;
   }
 
-  addMessage(question, "user");
-  addMessage(faq.answer, "bot", { rateable: true });
+  const order = demoOrders[number];
+  if (!order) {
+    addMessage(
+      `Учебный заказ № ${number} не найден. Проверьте номер: для демонстрации доступны 1001 и 1002.`,
+      "bot"
+    );
+  } else {
+    addMessage(
+      `Демонстрационный заказ № ${number}: ${order.status}. ${order.delivery}. Данные вымышлены.`,
+      "bot"
+    );
+  }
   showTopicMenu();
 }
 
+function scheduleDetails() {
+  const selected = scheduleTime.value;
+  let date;
+
+  if (selected === "inside") {
+    date = new Date("2026-11-23T09:00:00Z");
+  } else if (selected === "boundary") {
+    date = new Date("2026-11-23T15:00:00Z");
+  } else if (selected === "outside") {
+    date = new Date("2026-11-23T17:00:00Z");
+  } else {
+    date = new Date();
+  }
+
+  const parts = new Intl.DateTimeFormat("ru-RU", {
+    timeZone: "Europe/Moscow",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  const weekday = values.weekday.replace(".", "").toLocaleLowerCase("ru-RU");
+  const hour = Number(values.hour);
+  const isWeekday = ["пн", "вт", "ср", "чт", "пт"].includes(weekday);
+  const open = isWeekday && hour >= 9 && hour < 18;
+  const time = `${values.hour}:${values.minute}`;
+
+  return {
+    open,
+    time,
+    state: open ? "по учебному графику сейчас рабочее время" : "по учебному графику сейчас нерабочее время"
+  };
+}
+
+function updateScheduleStatus() {
+  const schedule = scheduleDetails();
+  document.querySelector("#hours-status").textContent =
+    `Контрольное время: ${schedule.time} Europe/Moscow — ${schedule.state}. Это расписание демонстрации, не статус подключения оператора.`;
+}
+
 function showOperatorSimulation() {
+  const schedule = scheduleDetails();
   addMessage("Оператор", "user");
-  addMessage(OPERATOR_MESSAGE, "bot");
+  addMessage(
+    `${schedule.state} (${schedule.time} Europe/Moscow; учебный график: Пн–Пт, 09:00–18:00). ${OPERATOR_MESSAGE}`,
+    "bot"
+  );
   showTopicMenu();
 }
 
@@ -216,27 +481,172 @@ function handleUserMessage(rawMessage) {
   if (message.toLocaleLowerCase("ru-RU") === "главное меню") {
     addMessage("Выберите тему или задайте вопрос.", "bot");
   } else if (isOperatorRequest(message)) {
-    addMessage(OPERATOR_MESSAGE, "bot");
+    const schedule = scheduleDetails();
+    addMessage(
+      `${schedule.state} (${schedule.time} Europe/Moscow; учебный график: Пн–Пт, 09:00–18:00). ${OPERATOR_MESSAGE}`,
+      "bot"
+    );
   } else {
-    const faqMatch = findFaq(message);
-    if (faqMatch) {
-      addMessage(topics[faqMatch.topic][faqMatch.faqIndex].answer, "bot", {
-        rateable: true
-      });
+    const orderRequest = getOrderRequest(message);
+    if (orderRequest) {
+      const number = orderRequest.number;
+      if (/^\d+$/.test(number)) {
+        const order = demoOrders[number];
+        if (number.length !== 4) {
+          addMessage("Неверный формат номера учебного заказа: требуется ровно четыре цифры, например 1001.", "bot");
+        } else if (!order) {
+          addMessage(
+            `Учебный заказ № ${number} не найден. Проверьте номер: для демонстрации доступны 1001 и 1002.`,
+            "bot"
+          );
+        } else {
+          addMessage(
+            `Демонстрационный заказ № ${number}: ${order.status}. ${order.delivery}. Данные вымышлены.`,
+            "bot"
+          );
+        }
+      } else {
+        addMessage(
+          "Неверный формат номера учебного заказа. Укажите ровно четыре цифры, например 1001 или 1002.",
+          "bot"
+        );
+      }
     } else {
-      addMessage(FALLBACK, "bot");
+      const faq = findFaq(message);
+      if (faq) {
+        addMessage(getFaqAnswer(faq), "bot", { rateable: true });
+      } else {
+        addMessage(FALLBACK, "bot");
+      }
     }
   }
 
   showTopicMenu();
 }
 
-function resetChat() {
+function updateStatistics() {
+  const yes = ratings.filter((rating) => rating.vote === "Да").length;
+  const no = ratings.filter((rating) => rating.vote === "Нет").length;
+  const total = yes + no;
+  document.querySelector("#total-votes").textContent = String(total);
+  document.querySelector("#yes-votes").textContent = String(yes);
+  document.querySelector("#no-votes").textContent = String(no);
+  document.querySelector("#useful-percent").textContent =
+    `${total ? Math.round((yes / total) * 100) : 0}%`;
+  document.querySelector("#stats-empty").hidden = total > 0;
+}
+
+function populateFaqEditor() {
+  faqSelector.replaceChildren();
+  allFaqs().forEach((faq) => {
+    const option = document.createElement("option");
+    option.value = faq.id;
+    option.textContent = faq.question;
+    faqSelector.append(option);
+  });
+  updateFaqEditor();
+}
+
+function updateFaqEditor() {
+  const faq = allFaqs().find((item) => item.id === faqSelector.value) || allFaqs()[0];
+  if (faq) {
+    faqAnswer.value = getFaqAnswer(faq);
+  }
+}
+
+function saveFaqAnswer() {
+  const faq = allFaqs().find((item) => item.id === faqSelector.value);
+  const answer = faqAnswer.value.trim();
+  if (!faq) {
+    faqEditorStatus.textContent = "Выберите вопрос FAQ.";
+    return;
+  }
+  if (!answer) {
+    faqEditorStatus.textContent = "Ответ не сохранён: введите непустой текст.";
+    return;
+  }
+
+  faqEdits[faq.id] = answer;
+  saveFaqEdits();
+  faqEditorStatus.textContent = "Ответ сохранён локально. Новые ответы чата будут использовать этот текст.";
+}
+
+function resetConversation(persistGreeting = true) {
+  messages = [];
   messagesElement.replaceChildren();
-  addMessage(INITIAL_GREETING, "bot");
+  if (persistGreeting) {
+    addMessage(INITIAL_GREETING, "bot");
+  } else {
+    nextMessageNumber += 1;
+    const greeting = {
+      id: `${Date.now()}-${nextMessageNumber}`,
+      sender: "bot",
+      text: INITIAL_GREETING,
+      rateable: false
+    };
+    messages.push(greeting);
+    renderMessage(greeting);
+  }
   showTopicMenu();
-  messageInput.value = "";
-  messageInput.focus();
+}
+
+function loadSavedData() {
+  const savedMessages = readStored(STORAGE_KEYS.history, []);
+  messages = Array.isArray(savedMessages)
+    ? savedMessages.filter((message) =>
+      message
+      && typeof message.id === "string"
+      && ["bot", "user"].includes(message.sender)
+      && typeof message.text === "string"
+    )
+    : [];
+
+  const savedRatings = readStored(STORAGE_KEYS.ratings, []);
+  ratings = Array.isArray(savedRatings)
+    ? savedRatings.filter((rating) =>
+      rating
+      && typeof rating.messageId === "string"
+      && ["Да", "Нет"].includes(rating.vote)
+    )
+    : [];
+
+  const savedFaqEdits = readStored(STORAGE_KEYS.faq, {});
+  faqEdits = savedFaqEdits && typeof savedFaqEdits === "object" && !Array.isArray(savedFaqEdits)
+    ? Object.fromEntries(
+      Object.entries(savedFaqEdits).filter(([id, answer]) =>
+        allFaqs().some((faq) => faq.id === id) && typeof answer === "string" && answer.trim()
+      )
+    )
+    : {};
+
+  nextMessageNumber = messages.length;
+  if (messages.length === 0) {
+    resetConversation();
+  } else {
+    renderMessages();
+    showTopicMenu();
+  }
+}
+
+function clearAllLocalData() {
+  const clearStatus = document.querySelector("#clear-data-status");
+  if (storageAvailable) {
+    try {
+      Object.values(STORAGE_KEYS).forEach((key) => localStorage.removeItem(key));
+    } catch (error) {
+      showStorageWarning(`Не удалось удалить локальные данные: ${error.message}`);
+    }
+  }
+
+  messages = [];
+  ratings = [];
+  faqEdits = {};
+  resetConversation(false);
+  populateFaqEditor();
+  updateStatistics();
+  clearStatus.textContent = storageAvailable
+    ? "Локальные история, оценки и изменения FAQ удалены. Новое приветствие существует только в текущем чате."
+    : "История и оценки очищены в текущем чате. Хранилище недоступно: проверить удаление сохранённых данных браузера нельзя.";
 }
 
 chatForm.addEventListener("submit", (event) => {
@@ -251,6 +661,18 @@ chatForm.addEventListener("submit", (event) => {
   messageInput.focus();
 });
 
-restartButton.addEventListener("click", resetChat);
+restartButton.addEventListener("click", () => {
+  resetConversation();
+  messageInput.value = "";
+  messageInput.focus();
+});
+faqSelector.addEventListener("change", updateFaqEditor);
+document.querySelector("#save-faq").addEventListener("click", saveFaqAnswer);
+scheduleTime.addEventListener("change", updateScheduleStatus);
+document.querySelector("#clear-local-data").addEventListener("click", clearAllLocalData);
 
-resetChat();
+initializeStorage();
+loadSavedData();
+populateFaqEditor();
+updateStatistics();
+updateScheduleStatus();
