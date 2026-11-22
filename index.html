@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f4f6fb">
   <title>Чат-бот поддержки — учебный прототип</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
   <script src="script.js" defer></script>
 </head>
@@ -40,6 +41,7 @@
         <span class="notice-icon" aria-hidden="true">i</span>
         <p>Условия магазина вымышлены и используются только в образовательных целях.</p>
       </div>
+      <p class="storage-notice" id="storage-notice" role="status" hidden></p>
 
       <section
         class="messages"
@@ -49,6 +51,7 @@
         aria-relevant="additions text"
         tabindex="0"
       ></section>
+      <p class="faq-match-status" id="faq-match-status" role="status" aria-live="polite" hidden></p>
 
       <nav class="quick-actions" id="quick-actions" aria-label="Быстрые ответы"></nav>
 
@@ -67,6 +70,62 @@
         </button>
       </form>
       <p class="keyboard-hint">Нажмите Enter, чтобы отправить сообщение</p>
+    </section>
+
+    <section class="demo-panel" id="demo-panel" aria-labelledby="demo-panel-title">
+      <div class="demo-panel-heading">
+        <div>
+          <span class="demo-label">Только для учебной демонстрации</span>
+          <h2 id="demo-panel-title">Демо-панель</h2>
+        </div>
+        <span class="demo-auth-note">Без реальной аутентификации</span>
+      </div>
+      <p class="demo-panel-description">
+        Настройки и показатели хранятся только в этом браузере и не являются данными реальной службы поддержки.
+      </p>
+
+      <div class="demo-grid">
+        <section class="demo-card" aria-labelledby="hours-title">
+          <h3 id="hours-title">Учебный график оператора</h3>
+          <p>Пн–Пт, 09:00–18:00 · Europe/Moscow</p>
+          <p class="hours-status" id="hours-status" aria-live="polite"></p>
+          <label for="schedule-time">Контрольное время для демонстрации</label>
+          <select id="schedule-time">
+            <option value="now">Текущее время Europe/Moscow</option>
+            <option value="inside">Будний день, 12:00 (в графике)</option>
+            <option value="boundary">Будний день, 18:00 (граница, вне графика)</option>
+            <option value="outside">Будний день, 20:00 (вне графика)</option>
+          </select>
+        </section>
+
+        <section class="demo-card" aria-labelledby="faq-editor-title">
+          <h3 id="faq-editor-title">Редактор ответа FAQ</h3>
+          <label for="faq-selector">Вопрос</label>
+          <select id="faq-selector"></select>
+          <label for="faq-answer">Текст ответа</label>
+          <textarea id="faq-answer" rows="3" maxlength="500"></textarea>
+          <button class="demo-button" id="save-faq" type="button">Сохранить ответ</button>
+          <p class="demo-feedback" id="faq-editor-status" role="status" aria-live="polite"></p>
+        </section>
+
+        <section class="demo-card" aria-labelledby="stats-title">
+          <h3 id="stats-title">Локальная статистика оценок</h3>
+          <p class="stats-scope">Только этот браузер · не глобальная статистика</p>
+          <dl class="stats-list">
+            <div><dt>Всего оценок</dt><dd id="total-votes">0</dd></div>
+            <div><dt>Да</dt><dd id="yes-votes">0</dd></div>
+            <div><dt>Нет</dt><dd id="no-votes">0</dd></div>
+            <div><dt>Полезных ответов</dt><dd id="useful-percent">0%</dd></div>
+          </dl>
+          <p class="demo-feedback" id="stats-empty" role="status">Оценок пока нет.</p>
+        </section>
+      </div>
+
+      <div class="demo-data-actions">
+        <p>История, ответы FAQ и оценки сохраняются раздельно в локальном хранилище браузера.</p>
+        <button class="danger-button" id="clear-local-data" type="button">Удалить все локальные данные</button>
+        <p class="demo-feedback" id="clear-data-status" role="status" aria-live="polite"></p>
+      </div>
     </section>
     <footer class="page-footer">Учебный проект · Без подключения к реальным сервисам</footer>
   </main>
