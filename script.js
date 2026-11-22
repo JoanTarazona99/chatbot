@@ -57,12 +57,15 @@ const faqSelector = document.querySelector("#faq-selector");
 const faqAnswer = document.querySelector("#faq-answer");
 const faqEditorStatus = document.querySelector("#faq-editor-status");
 const scheduleTime = document.querySelector("#schedule-time");
+const faqMatchStatus = document.querySelector("#faq-match-status");
 
 let storageAvailable = true;
 let nextMessageNumber = 0;
 let messages = [];
 let ratings = [];
 let faqEdits = {};
+let conversationGeneration = 0;
+const pendingFaqRequests = new Set();
 
 function showStorageWarning(details) {
   storageAvailable = false;
@@ -97,13 +100,15 @@ function readStored(key, fallback) {
 
 function writeStored(key, value) {
   if (!storageAvailable) {
-    return;
+    return false;
   }
 
   try {
     localStorage.setItem(key, JSON.stringify(value));
+    return true;
   } catch (error) {
     showStorageWarning(`Не удалось сохранить локальные данные: ${error.message}`);
+    return false;
   }
 }
 
@@ -116,7 +121,7 @@ function saveRatings() {
 }
 
 function saveFaqEdits() {
-  writeStored(STORAGE_KEYS.faq, faqEdits);
+  return writeStored(STORAGE_KEYS.faq, faqEdits);
 }
 
 function allFaqs() {
@@ -249,6 +254,13 @@ function renderMessage(message) {
   bubble.textContent = message.text;
   row.append(senderLabel, bubble);
 
+  if (message.sourceLabel) {
+    const source = document.createElement("span");
+    source.className = "answer-source";
+    source.textContent = message.sourceLabel;
+    row.append(source);
+  }
+
   if (message.rateable) {
     const feedback = document.createElement("div");
     feedback.className = "feedback";
@@ -271,7 +283,10 @@ function addMessage(text, sender, options = {}) {
     id: `${Date.now()}-${nextMessageNumber}`,
     sender,
     text,
-    rateable: Boolean(options.rateable)
+    rateable: Boolean(options.rateable),
+    sourceLabel: ["По правилам", "Подбор с помощью ИИ"].includes(options.sourceLabel)
+      ? options.sourceLabel
+      : ""
   };
   messages.push(message);
   saveHistory();
@@ -367,9 +382,9 @@ function isOperatorRequest(message) {
     .test(message);
 }
 
-function askQuestion(faq) {
+function askQuestion(faq, sourceLabel = "По правилам") {
   addMessage(faq.question, "user");
-  addMessage(getFaqAnswer(faq), "bot", { rateable: true });
+  addMessage(getFaqAnswer(faq), "bot", { rateable: true, sourceLabel });
   showTopicMenu();
 }
 
@@ -470,7 +485,74 @@ function returnToMenu() {
   showTopicMenu();
 }
 
-function handleUserMessage(rawMessage) {
+function updateFaqMatchStatus() {
+  faqMatchStatus.hidden = pendingFaqRequests.size === 0;
+  faqMatchStatus.textContent = pendingFaqRequests.size
+    ? "Подбираю подходящий ответ…"
+    : "";
+}
+
+function cancelPendingFaqMatches() {
+  conversationGeneration += 1;
+  pendingFaqRequests.forEach((controller) => controller.abort());
+  pendingFaqRequests.clear();
+  updateFaqMatchStatus();
+}
+
+async function resolveWithLocalModel(query, generation) {
+  if (window.location.protocol === "file:") {
+    addMessage(FALLBACK, "bot");
+    return;
+  }
+
+  const controller = new AbortController();
+  pendingFaqRequests.add(controller);
+  updateFaqMatchStatus();
+
+  try {
+    const response = await fetch("/api/faq-match", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query,
+        faqs: allFaqs().map(({ id, question }) => ({ id, question }))
+      }),
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      throw new Error(`FAQ match service returned ${response.status}`);
+    }
+
+    const result = await response.json();
+    if (generation !== conversationGeneration) {
+      return;
+    }
+
+    const faq = typeof result.faqId === "string"
+      ? allFaqs().find((item) => item.id === result.faqId)
+      : null;
+    if (faq) {
+      addMessage(getFaqAnswer(faq), "bot", {
+        rateable: true,
+        sourceLabel: "Подбор с помощью ИИ"
+      });
+    } else {
+      addMessage(FALLBACK, "bot");
+    }
+  } catch (error) {
+    if (generation === conversationGeneration && error.name !== "AbortError") {
+      addMessage(FALLBACK, "bot");
+    }
+  } finally {
+    pendingFaqRequests.delete(controller);
+    if (generation === conversationGeneration) {
+      updateFaqMatchStatus();
+    }
+  }
+}
+
+async function handleUserMessage(rawMessage) {
   const message = rawMessage.trim();
   if (!message) {
     return;
@@ -514,9 +596,12 @@ function handleUserMessage(rawMessage) {
     } else {
       const faq = findFaq(message);
       if (faq) {
-        addMessage(getFaqAnswer(faq), "bot", { rateable: true });
+        addMessage(getFaqAnswer(faq), "bot", {
+          rateable: true,
+          sourceLabel: "По правилам"
+        });
       } else {
-        addMessage(FALLBACK, "bot");
+        void resolveWithLocalModel(message, conversationGeneration);
       }
     }
   }
@@ -567,11 +652,14 @@ function saveFaqAnswer() {
   }
 
   faqEdits[faq.id] = answer;
-  saveFaqEdits();
-  faqEditorStatus.textContent = "Ответ сохранён локально. Новые ответы чата будут использовать этот текст.";
+  const saved = saveFaqEdits();
+  faqEditorStatus.textContent = saved
+    ? "Ответ сохранён локально. Новые ответы чата будут использовать этот текст."
+    : "Ответ обновлён только для текущей вкладки. После перезагрузки изменение не сохранится.";
 }
 
 function resetConversation(persistGreeting = true) {
+  cancelPendingFaqMatches();
   messages = [];
   messagesElement.replaceChildren();
   if (persistGreeting) {
@@ -598,7 +686,12 @@ function loadSavedData() {
       && typeof message.id === "string"
       && ["bot", "user"].includes(message.sender)
       && typeof message.text === "string"
-    )
+    ).map((message) => ({
+      ...message,
+      sourceLabel: ["По правилам", "Подбор с помощью ИИ"].includes(message.sourceLabel)
+        ? message.sourceLabel
+        : ""
+    }))
     : [];
 
   const savedRatings = readStored(STORAGE_KEYS.ratings, []);
